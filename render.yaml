@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: research-os
+    env: docker
+    dockerfilePath: ./Dockerfile
+    autoDeploy: false

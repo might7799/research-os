@@ -1,14 +1,50 @@
-# Research OS v1.2
+# Research OS v1.3
 
-نسخة ويب قابلة للتشغيل: واجهة عربية + FastAPI + بحث متوازٍ من OpenAlex وSemantic Scholar وCrossref + إزالة تكرار + Docker/Render.
+نظام ويب عربي للبحث الأكاديمي يجمع نتائج البحث من OpenAlex وSemantic Scholar وCrossref، ثم يزيل التكرار ويعرض النتائج في واجهة بسيطة ومباشرة.
 
-## تشغيل محلي
+## المميزات
+- FastAPI كخادم API
+- بحث متوازٍ عبر عدة مصادر أكاديمية
+- إزالة التكرار تلقائيًا
+- واجهة عربية مبسطة
+- جاهز لـ Docker و Render
+
+## التشغيل محلي
 ```bash
-cd backend
-python -m pip install -r requirements.txt
+cp .env.example .env
+python3 -m venv .venv
+. .venv/bin/activate
+pip install -r backend/requirements.txt
+export PYTHONPATH="$PWD/backend"
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
-افتح: `http://127.0.0.1:8000`
+افتح المتصفح على:
+`http://127.0.0.1:8000`
+
+## تشغيل الواجهة الأمامية
+```bash
+cd frontend
+npm install
+npm run dev -- --host 0.0.0.0 --port 5173
+```
+افتح:
+`http://localhost:5173`
+
+## إعدادات البيئة
+```env
+DATABASE_URL=sqlite:////workspaces/research-os/backend/data/research_os.db
+JWT_SECRET=change-me-to-a-long-random-string
+JWT_ALGORITHM=HS256
+```
+لـ PostgreSQL استخدم قيمة مثل:
+```env
+DATABASE_URL=postgresql://user:password@host:5432/dbname
+```
+
+## التحقق السريع
+```bash
+pytest backend/tests -q
+```
 
 ## تشغيل Docker
 ```bash
@@ -16,5 +52,13 @@ docker build -t research-os .
 docker run -p 8000:8000 research-os
 ```
 
-## النشر
-ارفع المجلد إلى GitHub ثم أنشئ Web Service في Render باستخدام Dockerfile الموجود. بعد النشر يصبح لديك رابط HTTPS عام.
+## النشر على Render
+- ارفع المشروع إلى GitHub
+- أنشئ Web Service جديد
+- استخدم Dockerfile الموجود
+- ثم قم بربطه بالنشر التلقائي أو التشغيل اليدوي
+
+## نقاط النهاية
+- `GET /` — الصفحة الرئيسية
+- `GET /api/health` — فحص الخدمة
+- `GET /api/search?q=AI` — البحث الأكاديمي

@@ -4,12 +4,14 @@ import re
 import unicodedata
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Dict, List, Literal
 from urllib.parse import quote, urlparse
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.auth import generate_api_token, hash_password, verify_password
@@ -2329,41 +2331,6 @@ def claim_critic_response(user_id: int, claim_id: int) -> Dict[str, Any]:
     }
 
 
-@app.get("/", response_class=HTMLResponse)
-def index() -> str:
-    return """
-    <!DOCTYPE html>
-    <html lang="ar">
-    <head>
-        <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Research OS</title>
-        <style>
-            :root { --primary: #1d4ed8; --bg: #f5f7fb; --card: #ffffff; --muted: #475569; }
-            body { font-family: Arial, sans-serif; background: var(--bg); margin: 0; padding: 40px; }
-            .container { max-width: 1000px; margin: 0 auto; background: var(--card); padding: 32px; border-radius: 16px; box-shadow: 0 15px 35px rgba(15, 23, 42, 0.08); }
-            h1 { color: var(--primary); margin-bottom: 10px; }
-            .pill { display: inline-block; background: #dbeafe; color: #1e3a8a; padding: 6px 12px; border-radius: 999px; font-size: 12px; font-weight: bold; }
-            ul { line-height: 2; color: var(--muted); }
-            code { background: #eef2ff; padding: 3px 6px; border-radius: 6px; }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <span class="pill">Research OS</span>
-            <h1>واجهة البحث الأكاديمي</h1>
-            <p>النظام يدعم البحث المتوازي عبر OpenAlex وSemantic Scholar وCrossref مع إزالة التكرار.</p>
-            <ul>
-                <li><code>/api/health</code> – فحص الخدمة</li>
-                <li><code>/api/search?q=AI</code> – استعلام بحث حقيقي</li>
-                <li><code>/api/auth/register</code> – تسجيل مستخدم جديد</li>
-                <li><code>/api/auth/login</code> – تسجيل دخول</li>
-            </ul>
-        </div>
-    </body>
-    </html>
-    """
-
 
 @app.get("/api/health")
 def health_check() -> Dict[str, str]:
@@ -2772,6 +2739,19 @@ async def search(
                         (user["id"], query, json.dumps(payload["results"]), workspace_id),
                     )
         except Exception:
-            pass
+                pass
 
     return payload
+# Serve the React frontend from the same FastAPI service in production.
+frontend_dist = Path(__file__).resolve().parents[2] / "frontend" / "dist"
+
+if frontend_dist.exists():
+    app.mount(
+        "/assets",
+        StaticFiles(directory=str(frontend_dist / "assets")),
+        name="frontend-assets",
+    )
+
+    @app.get("/")
+    async def frontend_index():
+        return FileResponse(frontend_dist / "index.html")

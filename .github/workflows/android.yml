@@ -20,7 +20,7 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Install Android SDK 34
+       - name: Install Android SDK 34
         uses: android-actions/setup-android@v3
         with:
           api-level: 34
@@ -35,7 +35,7 @@ jobs:
           cd frontend
           npm install
 
-      - name: Build frontend
+       - name: Build frontend
         run: |
           cd frontend
           npm run build
@@ -50,7 +50,7 @@ jobs:
           cd frontend/android
           ./gradlew assembleDebug
 
-      - name: Upload APK Artifact
+       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: app-debug.apk

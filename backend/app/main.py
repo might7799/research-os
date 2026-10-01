@@ -2347,7 +2347,7 @@ def register(payload: RegisterRequest) -> Dict[str, Any]:
 
     with get_connection() as conn:
         cursor = conn.execute(
-    cursor.execute("INSERT INTO users (username, password, created_at, role) VALUES (%s, %s, %s, %s) RETURNING id", (username, hashed_password, created_at, role))
+    cursor.execute("INSERT INTO users (username, password, created_at, role) VALUES (%s, %s, %s, %s) RETURNING id RETURNING id", (username, hashed_password, created_at, role))
             (payload.username, payload.email, password_hash, token),
         )
         user_id = cursor.fetchone()[0]
@@ -2390,7 +2390,7 @@ def search_history(user_token: str = Depends(decode_token)) -> List[Dict[str, An
 def create_workspace(payload: WorkspaceCreate, user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
     with get_connection() as conn:
         cursor = conn.execute(
-            "INSERT INTO research_workspaces (user_id, title, research_question, notes) VALUES (%s, %s, %s, %s) RETURNING user_id",
+            "INSERT INTO research_workspaces (user_id, title, research_question, notes) VALUES (%s, %s, %s, %s) RETURNING id RETURNING user_id",
             (user["id"], payload.title, payload.research_question, payload.notes),
         )
         workspace_id = cursor.fetchone()[0]
@@ -2542,7 +2542,7 @@ def create_claim(payload: ClaimCreate, user: Dict[str, Any] = Depends(get_curren
         get_owned_workspace(user["id"], payload.workspace_id)
     with get_connection() as conn:
         cursor = conn.execute(
-            "INSERT INTO claims (user_id, claim_text, status, workspace_id) VALUES (%s, %s, %s, %s) RETURNING user_id",
+            "INSERT INTO claims (user_id, claim_text, status, workspace_id) VALUES (%s, %s, %s, %s) RETURNING id RETURNING user_id",
             (user["id"], payload.claim_text, payload.status, payload.workspace_id),
         )
         claim_id = cursor.fetchone()[0]
@@ -2735,7 +2735,7 @@ async def search(
             if user:
                 with get_connection() as conn:
                     conn.execute(
-                        "INSERT INTO searches (user_id, query, results, workspace_id) VALUES (%s, %s, %s, %s) RETURNING user_id",
+                        "INSERT INTO searches (user_id, query, results, workspace_id) VALUES (%s, %s, %s, %s) RETURNING id RETURNING user_id",
                         (user["id"], query, json.dumps(payload["results"]), workspace_id),
                     )
         except Exception:

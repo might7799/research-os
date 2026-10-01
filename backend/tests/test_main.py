@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import secrets
 import sqlite3
 import subprocess
@@ -791,10 +792,22 @@ def test_claim_critic_rule_based_audit_and_user_isolation():
     assert client.get(f"/api/claims/{empty_claim_id}/critic", headers=other_headers).status_code == 404
 
 
-def test_root_page_contains_title():
+@pytest.mark.skipif(
+    not main_module.FRONTEND_DIST.joinpath("index.html").is_file(),
+    reason="Build the frontend to test its production entrypoint",
+)
+def test_root_page_serves_vite_build_and_assets():
     response = client.get("/")
     assert response.status_code == 200
     assert "Research OS" in response.text
+    assert '<div id="root"></div>' in response.text
+
+    assets = re.findall(r'(?:src|href)="(/assets/[^\"]+)"', response.text)
+    assert len(assets) >= 2
+    for asset_path in assets:
+        asset_response = client.get(asset_path)
+        assert asset_response.status_code == 200
+        assert asset_response.content
 
 
 def test_research_workspace_unifies_research_data_and_isolates_users(monkeypatch):

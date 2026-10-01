@@ -2347,7 +2347,7 @@ def register(payload: RegisterRequest) -> Dict[str, Any]:
 
     with get_connection() as conn:
         cursor = conn.execute(
-            "INSERT INTO users (username, email, password_hash, api_token) VALUES (%s, %s, %s, %s) RETURNING user_id",
+    cursor.execute("INSERT INTO users (username, password, created_at, role) VALUES (%s, %s, %s, %s) RETURNING id", (username, hashed_password, created_at, role))
             (payload.username, payload.email, password_hash, token),
         )
         user_id = cursor.fetchone()[0]

@@ -91,3 +91,7 @@ async def login(user: UserLogin):
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         conn.close()
+
+@app.get('/')
+def home():
+    return {'status': 'success', 'message': 'Research OS API is active'}

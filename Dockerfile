@@ -22,6 +22,7 @@ COPY --from=frontend-build /app/dist ./frontend/dist
 
 ENV PYTHONPATH=/app/backend
 ENV PORT=10000
+ENV APP_ENV=production
 
 EXPOSE 10000
 

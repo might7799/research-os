@@ -8,16 +8,35 @@ from typing import Any, Dict, List, Literal
 from urllib.parse import quote, urlparse
 
 import httpx
-from fastapi import Depends, FastAPI, Header, HTTPException, Query
-from fastapi.responses import HTMLResponse
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, Field
 
 from app.auth import generate_api_token, hash_password, verify_password
-from app.database import get_connection, init_db
+from app.config import APP_ENV, DATABASE_URL, PRODUCTION_ENVS
+from app.database import (
+    DATABASE_ERRORS,
+    get_connection,
+    init_db,
+    insert_and_get_id,
+    is_integrity_error,
+    verify_database_connection,
+)
 from app.security import decode_token, decode_token_value
 
 app = FastAPI(title="Research OS", version="1.4.0")
-init_db()
+if APP_ENV in PRODUCTION_ENVS or DATABASE_URL.startswith("postgresql://"):
+    verify_database_connection()
+else:
+    init_db()
+
+
+async def database_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    return JSONResponse(status_code=503, content={"detail": "Database unavailable"})
+
+
+for database_error in DATABASE_ERRORS:
+    app.add_exception_handler(database_error, database_error_handler)
 
 
 class SearchResult(BaseModel):
@@ -728,6 +747,15 @@ def get_user_by_username(username: str) -> Dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def get_user_by_email(email: str) -> Dict[str, Any] | None:
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM users WHERE email = ?",
+            (email,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
 def get_user_by_api_token(token: str) -> Dict[str, Any] | None:
     with get_connection() as conn:
         row = conn.execute(
@@ -737,8 +765,16 @@ def get_user_by_api_token(token: str) -> Dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def get_user_from_access_token(token: str) -> Dict[str, Any]:
+    username = decode_token_value(token)
+    user = get_user_by_api_token(token)
+    if not user or user["username"] != username:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    return user
+
+
 def get_current_user(user_token: str = Depends(decode_token)) -> Dict[str, Any]:
-    user = get_user_by_username(user_token)
+    user = get_user_by_api_token(user_token)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid token")
     return user
@@ -2367,23 +2403,29 @@ def index() -> str:
 
 @app.get("/api/health")
 def health_check() -> Dict[str, str]:
+    verify_database_connection()
     return {"status": "ok", "service": "research-os"}
 
 
 @app.post("/api/auth/register", status_code=201)
 def register(payload: RegisterRequest) -> Dict[str, Any]:
-    if get_user_by_username(payload.username):
-        raise HTTPException(status_code=409, detail="Username already exists")
+    if get_user_by_username(payload.username) or get_user_by_email(payload.email):
+        raise HTTPException(status_code=409, detail="Username or email already exists")
 
     token = generate_api_token(payload.username)
     password_hash = hash_password(payload.password)
 
-    with get_connection() as conn:
-        cursor = conn.execute(
-            "INSERT INTO users (username, email, password_hash, api_token) VALUES (?, ?, ?, ?)",
-            (payload.username, payload.email, password_hash, token),
-        )
-        user_id = cursor.lastrowid
+    try:
+        with get_connection() as conn:
+            user_id = insert_and_get_id(
+                conn,
+                "INSERT INTO users (username, email, password_hash, api_token) VALUES (?, ?, ?, ?)",
+                (payload.username, payload.email, password_hash, token),
+            )
+    except Exception as exc:
+        if is_integrity_error(exc):
+            raise HTTPException(status_code=409, detail="Username or email already exists") from exc
+        raise
 
     return {
         "message": "User registered successfully",
@@ -2398,15 +2440,19 @@ def login(payload: LoginRequest) -> Dict[str, Any]:
     if not user or not verify_password(payload.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid username or password")
 
+    token = generate_api_token(payload.username)
+    with get_connection() as conn:
+        conn.execute("UPDATE users SET api_token = ? WHERE id = ?", (token, user["id"]))
+
     return {
-        "token": user["api_token"],
+        "token": token,
         "user": {"id": user["id"], "username": user["username"], "email": user["email"]},
     }
 
 
 @app.get("/api/search-history")
 def search_history(user_token: str = Depends(decode_token)) -> List[Dict[str, Any]]:
-    user = get_user_by_username(user_token)
+    user = get_user_by_api_token(user_token)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid token")
 
@@ -2422,11 +2468,11 @@ def search_history(user_token: str = Depends(decode_token)) -> List[Dict[str, An
 @app.post("/api/workspaces", status_code=201)
 def create_workspace(payload: WorkspaceCreate, user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
     with get_connection() as conn:
-        cursor = conn.execute(
+        workspace_id = insert_and_get_id(
+            conn,
             "INSERT INTO research_workspaces (user_id, title, research_question, notes) VALUES (?, ?, ?, ?)",
             (user["id"], payload.title, payload.research_question, payload.notes),
         )
-        workspace_id = cursor.lastrowid
     return get_owned_workspace(user["id"], workspace_id)
 
 
@@ -2574,11 +2620,11 @@ def create_claim(payload: ClaimCreate, user: Dict[str, Any] = Depends(get_curren
     if payload.workspace_id is not None:
         get_owned_workspace(user["id"], payload.workspace_id)
     with get_connection() as conn:
-        cursor = conn.execute(
+        claim_id = insert_and_get_id(
+            conn,
             "INSERT INTO claims (user_id, claim_text, status, workspace_id) VALUES (?, ?, ?, ?)",
             (user["id"], payload.claim_text, payload.status, payload.workspace_id),
         )
-        claim_id = cursor.lastrowid
     return claim_response(user["id"], claim_id)
 
 
@@ -2592,7 +2638,8 @@ def create_evidence(payload: EvidenceCreate, user: Dict[str, Any] = Depends(get_
         raise HTTPException(status_code=422, detail="Evidence requires an excerpt or abstract")
 
     with get_connection() as conn:
-        cursor = conn.execute(
+        evidence_id = insert_and_get_id(
+            conn,
             """
             INSERT INTO evidence
                 (user_id, source_id, source_title, authors, year, doi, url, excerpt, evidence_type, relation, confidence, workspace_id)
@@ -2613,7 +2660,6 @@ def create_evidence(payload: EvidenceCreate, user: Dict[str, Any] = Depends(get_
                 payload.workspace_id,
             ),
         )
-        evidence_id = cursor.lastrowid
         row = conn.execute("SELECT * FROM evidence WHERE id = ? AND user_id = ?", (evidence_id, user["id"])).fetchone()
     return evidence_from_row(row)
 
@@ -2693,13 +2739,14 @@ def create_claim_relation(claim_id: int, payload: ClaimRelationCreate, user: Dic
         if duplicate:
             raise HTTPException(status_code=409, detail="Claim relation already exists")
 
-        cursor = conn.execute(
+        relation_id = insert_and_get_id(
+            conn,
             "INSERT INTO claim_relations (user_id, source_claim_id, target_claim_id, relation, workspace_id) VALUES (?, ?, ?, ?, ?)",
             (user["id"], claim_id, payload.target_claim_id, payload.relation, workspace_id),
         )
         relation_row = conn.execute(
             "SELECT * FROM claim_relations WHERE id = ? AND user_id = ?",
-            (cursor.lastrowid, user["id"]),
+            (relation_id, user["id"]),
         ).fetchone()
 
     return claim_relation_response(relation_row)
@@ -2737,9 +2784,7 @@ async def search(
         if not authorization or not authorization.startswith("Bearer "):
             raise HTTPException(status_code=401, detail="Workspace search requires authentication")
         token = authorization.split(" ", 1)[1]
-        authenticated_user = get_user_by_username(decode_token_value(token))
-        if not authenticated_user:
-            raise HTTPException(status_code=401, detail="Invalid token")
+        authenticated_user = get_user_from_access_token(token)
         get_owned_workspace(authenticated_user["id"], workspace_id)
 
     source_results = await asyncio.gather(
@@ -2764,7 +2809,7 @@ async def search(
     if authorization and authorization.startswith("Bearer "):
         token = authorization.split(" ", 1)[1]
         try:
-            user = authenticated_user or get_user_by_username(decode_token_value(token))
+            user = authenticated_user or get_user_from_access_token(token)
             if user:
                 with get_connection() as conn:
                     conn.execute(

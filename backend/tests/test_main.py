@@ -1,9 +1,24 @@
 import json
+import os
+import secrets
+import sqlite3
+import subprocess
+import sys
 import uuid
+from pathlib import Path
+from unittest.mock import Mock
 
+import jwt
+import psycopg
+import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import app.main as main_module
+from app.config import DATABASE_URL, JWT_ALGORITHM, JWT_SECRET
+import app.database as database_module
+from app.database import get_connection, insert_and_get_id, verify_database_connection
+from app.security import create_token, decode_token_value
 from app.main import (
     CouncilInputContract,
     CrossrefClient,
@@ -39,6 +54,132 @@ def test_health_check():
     assert response.json()["status"] == "ok"
 
 
+def test_openapi_contains_core_application_routes():
+    response = client.get("/openapi.json")
+    assert response.status_code == 200
+    paths = response.json()["paths"]
+    required_routes = {
+        "/api/health": {"get"},
+        "/api/auth/register": {"post"},
+        "/api/auth/login": {"post"},
+        "/api/search": {"get"},
+        "/api/search-history": {"get"},
+        "/api/claims": {"post"},
+        "/api/evidence": {"post"},
+        "/api/workspaces": {"get", "post"},
+        "/api/workspaces/{workspace_id}/view": {"get"},
+        "/api/workspaces/{workspace_id}/memory": {"get"},
+    }
+
+    for path, methods in required_routes.items():
+        assert methods <= paths[path].keys()
+
+
+def test_postgresql_adapter_translates_parameters_and_returns_id():
+    raw_connection = Mock()
+    raw_cursor = Mock()
+    raw_cursor.fetchone.return_value = {"id": 17}
+    raw_connection.execute.return_value = raw_cursor
+    connection = database_module.PostgresConnection(raw_connection)
+
+    item_id = insert_and_get_id(
+        connection,
+        "INSERT INTO adapter_probe (value) VALUES (?)",
+        ("postgres adapter",),
+    )
+
+    assert item_id == 17
+    raw_connection.execute.assert_called_once_with(
+        "INSERT INTO adapter_probe (value) VALUES (%s) RETURNING id",
+        ("postgres adapter",),
+    )
+
+
+def test_postgresql_connection_failure_does_not_fall_back_to_sqlite(monkeypatch):
+    def fail_connection(*args, **kwargs):
+        raise psycopg.OperationalError("connection failed")
+
+    monkeypatch.setattr(database_module, "DATABASE_URL", "postgresql://db.invalid/research")
+    monkeypatch.setattr(database_module.psycopg, "connect", fail_connection)
+
+    with pytest.raises(psycopg.OperationalError, match="connection failed"):
+        database_module.get_connection()
+
+
+def test_postgresql_schema_initialization_requires_explicit_migration(monkeypatch):
+    monkeypatch.setattr(database_module, "DATABASE_URL", "postgresql://db.invalid/research")
+
+    with pytest.raises(RuntimeError, match="applied explicitly"):
+        database_module.init_db()
+
+
+def test_database_verification_detects_missing_schema_without_creating_it(monkeypatch, tmp_path):
+    isolated_database = tmp_path / "uninitialized.db"
+    monkeypatch.setattr(database_module, "DATABASE_URL", f"sqlite:///{isolated_database}")
+
+    with pytest.raises(sqlite3.OperationalError, match="no such table"):
+        verify_database_connection()
+
+    with sqlite3.connect(isolated_database) as connection:
+        assert connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'").fetchall() == []
+
+
+def test_health_hides_database_connection_details(monkeypatch):
+    def fail_connection():
+        raise psycopg.OperationalError("postgresql://user:secret@db.invalid/research")
+
+    monkeypatch.setattr(main_module, "verify_database_connection", fail_connection)
+
+    response = client.get("/api/health")
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Database unavailable"}
+    assert "secret" not in response.text
+
+
+def test_test_database_is_not_the_local_application_database():
+    local_database = Path(__file__).resolve().parents[1] / "data" / "research_os.db"
+
+    assert DATABASE_URL.startswith("sqlite:///")
+    assert Path(DATABASE_URL.removeprefix("sqlite:///")).resolve() != local_database.resolve()
+
+
+@pytest.mark.parametrize(
+    ("database_url", "secret_mode", "expected_error"),
+    [
+        (None, "valid", "DATABASE_URL must be configured"),
+        ("sqlite:///tmp/unused.db", "valid", "Production requires PostgreSQL"),
+        ("postgresql://db.invalid/research", "missing", "JWT_SECRET must be set"),
+        ("postgresql://db.invalid/research", "short", "JWT_SECRET must be set"),
+    ],
+)
+def test_production_configuration_fails_closed(database_url, secret_mode, expected_error):
+    environment = os.environ.copy()
+    environment["APP_ENV"] = "production"
+    environment["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+    if database_url is None:
+        environment.pop("DATABASE_URL", None)
+    else:
+        environment["DATABASE_URL"] = database_url
+    if secret_mode == "valid":
+        environment["JWT_SECRET"] = secrets.token_urlsafe(48)
+    elif secret_mode == "missing":
+        environment.pop("JWT_SECRET", None)
+    else:
+        environment["JWT_SECRET"] = "too-short"
+
+    result = subprocess.run(
+        [sys.executable, "-c", "import app.config"],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert expected_error in result.stderr
+
+
 def test_search_endpoint():
     response = client.get("/api/search", params={"q": "AI"})
     assert response.status_code == 200
@@ -65,6 +206,128 @@ def test_auth_flow_register_login():
     payload = login.json()
     assert "token" in payload
     assert payload["user"]["username"] == username
+    assert payload["token"] != register.json()["token"]
+
+    stale_token_response = client.get(
+        "/api/search-history",
+        headers={"Authorization": f"Bearer {register.json()['token']}"},
+    )
+    assert stale_token_response.status_code == 401
+    current_token_response = client.get(
+        "/api/search-history",
+        headers={"Authorization": f"Bearer {payload['token']}"},
+    )
+    assert current_token_response.status_code == 200
+
+
+def test_register_rejects_duplicate_email():
+    username, email = unique_identity("duplicate_email")
+    first = client.post(
+        "/api/auth/register",
+        json={"username": username, "email": email, "password": "StrongPass123!"},
+    )
+    second = client.post(
+        "/api/auth/register",
+        json={"username": f"{username}_other", "email": email, "password": "StrongPass123!"},
+    )
+
+    assert first.status_code == 201
+    assert second.status_code == 409
+
+
+def test_expired_access_token_is_rejected():
+    from datetime import datetime, timedelta, timezone
+    from fastapi import HTTPException
+
+    issued_at = datetime.now(timezone.utc) - timedelta(hours=2)
+    token = jwt.encode(
+        {
+            "sub": "expired-user",
+            "type": "access",
+            "iat": issued_at,
+            "exp": issued_at + timedelta(hours=1),
+            "jti": uuid.uuid4().hex,
+        },
+        JWT_SECRET,
+        algorithm=JWT_ALGORITHM,
+    )
+
+    with pytest.raises(HTTPException) as error:
+        decode_token_value(token)
+    assert error.value.status_code == 401
+
+
+def test_tampered_access_token_is_rejected():
+    token = create_token("tampered-user")
+    header, payload, signature = token.split(".")
+    tampered_token = f"{header}.{payload}.{signature[:-1]}{'A' if signature[-1] != 'A' else 'B'}"
+
+    with pytest.raises(HTTPException) as error:
+        decode_token_value(tampered_token)
+
+    assert error.value.status_code == 401
+
+
+def test_failed_login_uses_the_same_generic_response():
+    username, email = unique_identity("failed_login")
+    client.post(
+        "/api/auth/register",
+        json={"username": username, "email": email, "password": "StrongPass123!"},
+    )
+
+    known_user = client.post(
+        "/api/auth/login",
+        json={"username": username, "password": "wrong-password"},
+    )
+    unknown_user = client.post(
+        "/api/auth/login",
+        json={"username": f"missing_{username}", "password": "wrong-password"},
+    )
+
+    assert known_user.status_code == unknown_user.status_code == 401
+    assert known_user.json() == unknown_user.json() == {"detail": "Invalid username or password"}
+
+
+def test_expired_access_token_cannot_search_workspace():
+    from datetime import datetime, timedelta, timezone
+
+    username, email = unique_identity("expired_workspace")
+    registration = client.post(
+        "/api/auth/register",
+        json={"username": username, "email": email, "password": "StrongPass123!"},
+    )
+    token = registration.json()["token"]
+    workspace_response = client.post(
+        "/api/workspaces",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"title": "Test", "research_question": "Test question"},
+    )
+    issued_at = datetime.now(timezone.utc) - timedelta(hours=2)
+    expired_token = jwt.encode(
+        {
+            "sub": username,
+            "type": "access",
+            "iat": issued_at,
+            "exp": issued_at + timedelta(hours=1),
+            "jti": uuid.uuid4().hex,
+        },
+        JWT_SECRET,
+        algorithm=JWT_ALGORITHM,
+    )
+    with get_connection() as conn:
+        conn.execute(
+            "UPDATE users SET api_token = ? WHERE username = ?",
+            (expired_token, username),
+        )
+
+    response = client.get(
+        "/api/search",
+        params={"q": "AI", "workspace_id": workspace_response.json()["id"]},
+        headers={"Authorization": f"Bearer {expired_token}"},
+    )
+
+    assert workspace_response.status_code == 201
+    assert response.status_code == 401
 
 
 def test_history_is_saved_for_authenticated_user():

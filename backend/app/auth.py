@@ -1,3 +1,4 @@
+import hmac
 import hashlib
 import os
 
@@ -16,8 +17,9 @@ def verify_password(password: str, stored_hash: str) -> bool:
         if algorithm != "pbkdf2_sha256":
             return False
         salt = bytes.fromhex(salt_hex)
+        expected = bytes.fromhex(digest_hex)
         derived = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, 200_000)
-        return derived.hex() == digest_hex
+        return hmac.compare_digest(derived, expected)
     except ValueError:
         return False
 

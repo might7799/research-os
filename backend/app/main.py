@@ -2350,7 +2350,7 @@ def register(payload: RegisterRequest) -> Dict[str, Any]:
             "INSERT INTO users (username, email, password_hash, api_token) VALUES (%s, %s, %s, %s)",
             (payload.username, payload.email, password_hash, token),
         )
-        user_id = cursor.lastrowid
+        user_id = cursor.fetchone()[0]
 
     return {
         "message": "User registered successfully",
@@ -2393,7 +2393,7 @@ def create_workspace(payload: WorkspaceCreate, user: Dict[str, Any] = Depends(ge
             "INSERT INTO research_workspaces (user_id, title, research_question, notes) VALUES (%s, %s, %s, %s)",
             (user["id"], payload.title, payload.research_question, payload.notes),
         )
-        workspace_id = cursor.lastrowid
+        workspace_id = cursor.fetchone()[0]
     return get_owned_workspace(user["id"], workspace_id)
 
 
@@ -2545,7 +2545,7 @@ def create_claim(payload: ClaimCreate, user: Dict[str, Any] = Depends(get_curren
             "INSERT INTO claims (user_id, claim_text, status, workspace_id) VALUES (%s, %s, %s, %s)",
             (user["id"], payload.claim_text, payload.status, payload.workspace_id),
         )
-        claim_id = cursor.lastrowid
+        claim_id = cursor.fetchone()[0]
     return claim_response(user["id"], claim_id)
 
 
@@ -2580,7 +2580,7 @@ def create_evidence(payload: EvidenceCreate, user: Dict[str, Any] = Depends(get_
                 payload.workspace_id,
             ),
         )
-        evidence_id = cursor.lastrowid
+        evidence_id = cursor.fetchone()[0]
         row = conn.execute("SELECT * FROM evidence WHERE id = %s AND user_id = %s", (evidence_id, user["id"])).fetchone()
     return evidence_from_row(row)
 
@@ -2666,7 +2666,7 @@ def create_claim_relation(claim_id: int, payload: ClaimRelationCreate, user: Dic
         )
         relation_row = conn.execute(
             "SELECT * FROM claim_relations WHERE id = %s AND user_id = %s",
-            (cursor.lastrowid, user["id"]),
+            (cursor.fetchone()[0], user["id"]),
         ).fetchone()
 
     return claim_relation_response(relation_row)

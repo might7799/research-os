@@ -576,7 +576,7 @@ def normalize_doi(value: str | None) -> str:
     if not value:
         return ""
     normalized = re.sub(
-        r"^https?://(dx\.)?doi\.org/",
+        r"^https%s://(dx\.)%sdoi\.org/",
         "",
         value.strip(),
         flags=re.IGNORECASE,
@@ -724,7 +724,7 @@ async def fetch_source_safely(source_name: str, fetcher, query: str) -> tuple[st
 def get_user_by_username(username: str) -> Dict[str, Any] | None:
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT * FROM users WHERE username = ?",
+            "SELECT * FROM users WHERE username = %s",
             (username,),
         ).fetchone()
     return dict(row) if row else None
@@ -733,7 +733,7 @@ def get_user_by_username(username: str) -> Dict[str, Any] | None:
 def get_user_by_api_token(token: str) -> Dict[str, Any] | None:
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT * FROM users WHERE api_token = ?",
+            "SELECT * FROM users WHERE api_token = %s",
             (token,),
         ).fetchone()
     return dict(row) if row else None
@@ -749,7 +749,7 @@ def get_current_user(user_token: str = Depends(decode_token)) -> Dict[str, Any]:
 def get_owned_workspace(user_id: int, workspace_id: int) -> Dict[str, Any]:
     with get_connection() as conn:
         row = conn.execute(
-            "SELECT * FROM research_workspaces WHERE id = ? AND user_id = ?",
+            "SELECT * FROM research_workspaces WHERE id = %s AND user_id = %s",
             (workspace_id, user_id),
         ).fetchone()
     if not row:
@@ -769,7 +769,7 @@ def evidence_from_row(row: Any) -> Dict[str, Any]:
 def claim_response(user_id: int, claim_id: int) -> Dict[str, Any]:
     with get_connection() as conn:
         claim = conn.execute(
-            "SELECT id, claim_text, status, workspace_id, created_at FROM claims WHERE id = ? AND user_id = ?",
+            "SELECT id, claim_text, status, workspace_id, created_at FROM claims WHERE id = %s AND user_id = %s",
             (claim_id, user_id),
         ).fetchone()
         if not claim:
@@ -778,7 +778,7 @@ def claim_response(user_id: int, claim_id: int) -> Dict[str, Any]:
             """
             SELECT e.* FROM evidence e
             JOIN claim_evidence ce ON ce.evidence_id = e.id
-            WHERE ce.claim_id = ? AND e.user_id = ?
+            WHERE ce.claim_id = %s AND e.user_id = %s
             ORDER BY e.id
             """,
             (claim_id, user_id),
@@ -808,19 +808,19 @@ def workspace_response(user_id: int, workspace_id: int) -> Dict[str, Any]:
     workspace = get_owned_workspace(user_id, workspace_id)
     with get_connection() as conn:
         search_rows = conn.execute(
-            "SELECT id, query, results, created_at, workspace_id FROM searches WHERE id IS NOT NULL AND user_id = ? AND workspace_id = ? ORDER BY created_at DESC",
+            "SELECT id, query, results, created_at, workspace_id FROM searches WHERE id IS NOT NULL AND user_id = %s AND workspace_id = %s ORDER BY created_at DESC",
             (user_id, workspace_id),
         ).fetchall()
         claim_rows = conn.execute(
-            "SELECT id FROM claims WHERE user_id = ? AND workspace_id = ? ORDER BY created_at",
+            "SELECT id FROM claims WHERE user_id = %s AND workspace_id = %s ORDER BY created_at",
             (user_id, workspace_id),
         ).fetchall()
         evidence_rows = conn.execute(
-            "SELECT * FROM evidence WHERE user_id = ? AND workspace_id = ? ORDER BY created_at",
+            "SELECT * FROM evidence WHERE user_id = %s AND workspace_id = %s ORDER BY created_at",
             (user_id, workspace_id),
         ).fetchall()
         relation_rows = conn.execute(
-            "SELECT * FROM claim_relations WHERE user_id = ? AND workspace_id = ? ORDER BY created_at",
+            "SELECT * FROM claim_relations WHERE user_id = %s AND workspace_id = %s ORDER BY created_at",
             (user_id, workspace_id),
         ).fetchall()
 
@@ -2225,7 +2225,7 @@ def council_foundation_response(user_id: int, workspace_id: int) -> CouncilFound
 def claim_critic_response(user_id: int, claim_id: int) -> Dict[str, Any]:
     with get_connection() as conn:
         claim = conn.execute(
-            "SELECT id, claim_text, status, created_at FROM claims WHERE id = ? AND user_id = ?",
+            "SELECT id, claim_text, status, created_at FROM claims WHERE id = %s AND user_id = %s",
             (claim_id, user_id),
         ).fetchone()
         if not claim:
@@ -2235,7 +2235,7 @@ def claim_critic_response(user_id: int, claim_id: int) -> Dict[str, Any]:
             """
             SELECT e.* FROM evidence e
             JOIN claim_evidence ce ON ce.evidence_id = e.id
-            WHERE ce.claim_id = ? AND e.user_id = ?
+            WHERE ce.claim_id = %s AND e.user_id = %s
             ORDER BY e.id
             """,
             (claim_id, user_id),
@@ -2244,7 +2244,7 @@ def claim_critic_response(user_id: int, claim_id: int) -> Dict[str, Any]:
         relation_rows = conn.execute(
             """
             SELECT * FROM claim_relations
-            WHERE user_id = ? AND (source_claim_id = ? OR target_claim_id = ?)
+            WHERE user_id = %s AND (source_claim_id = %s OR target_claim_id = %s)
             ORDER BY created_at DESC
             """,
             (user_id, claim_id, claim_id),
@@ -2347,7 +2347,7 @@ def register(payload: RegisterRequest) -> Dict[str, Any]:
 
     with get_connection() as conn:
         cursor = conn.execute(
-            "INSERT INTO users (username, email, password_hash, api_token) VALUES (?, ?, ?, ?)",
+            "INSERT INTO users (username, email, password_hash, api_token) VALUES (%s, %s, %s, %s)",
             (payload.username, payload.email, password_hash, token),
         )
         user_id = cursor.lastrowid
@@ -2379,7 +2379,7 @@ def search_history(user_token: str = Depends(decode_token)) -> List[Dict[str, An
 
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT id, query, results, created_at FROM searches WHERE user_id = ? ORDER BY created_at DESC",
+            "SELECT id, query, results, created_at FROM searches WHERE user_id = %s ORDER BY created_at DESC",
             (user["id"],),
         ).fetchall()
 
@@ -2390,7 +2390,7 @@ def search_history(user_token: str = Depends(decode_token)) -> List[Dict[str, An
 def create_workspace(payload: WorkspaceCreate, user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
     with get_connection() as conn:
         cursor = conn.execute(
-            "INSERT INTO research_workspaces (user_id, title, research_question, notes) VALUES (?, ?, ?, ?)",
+            "INSERT INTO research_workspaces (user_id, title, research_question, notes) VALUES (%s, %s, %s, %s)",
             (user["id"], payload.title, payload.research_question, payload.notes),
         )
         workspace_id = cursor.lastrowid
@@ -2409,7 +2409,7 @@ def list_workspaces(user: Dict[str, Any] = Depends(get_current_user)) -> List[Di
             LEFT JOIN claims c ON c.workspace_id = w.id AND c.user_id = w.user_id
             LEFT JOIN evidence e ON e.workspace_id = w.id AND e.user_id = w.user_id
             LEFT JOIN searches s ON s.workspace_id = w.id AND s.user_id = w.user_id
-            WHERE w.user_id = ?
+            WHERE w.user_id = %s
             GROUP BY w.id
             ORDER BY w.updated_at DESC, w.id DESC
             """,
@@ -2510,11 +2510,11 @@ def update_workspace(workspace_id: int, payload: WorkspaceUpdate, user: Dict[str
     changes = payload.model_dump(exclude_unset=True)
     if not changes:
         return get_owned_workspace(user["id"], workspace_id)
-    fields = [f"{field} = ?" for field in changes]
+    fields = [f"{field} = %s" for field in changes]
     values = list(changes.values()) + [workspace_id, user["id"]]
     with get_connection() as conn:
         conn.execute(
-            f"UPDATE research_workspaces SET {', '.join(fields)}, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?",
+            f"UPDATE research_workspaces SET {', '.join(fields)}, updated_at = CURRENT_TIMESTAMP WHERE id = %s AND user_id = %s",
             values,
         )
     return get_owned_workspace(user["id"], workspace_id)
@@ -2526,11 +2526,11 @@ def delete_workspace(workspace_id: int, user: Dict[str, Any] = Depends(get_curre
     with get_connection() as conn:
         for table in ("searches", "claims", "evidence", "claim_relations"):
             conn.execute(
-                f"UPDATE {table} SET workspace_id = NULL WHERE workspace_id = ? AND user_id = ?",
+                f"UPDATE {table} SET workspace_id = NULL WHERE workspace_id = %s AND user_id = %s",
                 (workspace_id, user["id"]),
             )
         conn.execute(
-            "DELETE FROM research_workspaces WHERE id = ? AND user_id = ?",
+            "DELETE FROM research_workspaces WHERE id = %s AND user_id = %s",
             (workspace_id, user["id"]),
         )
     return {"deleted": True, "workspace_id": workspace_id, "data_preserved": True}
@@ -2542,7 +2542,7 @@ def create_claim(payload: ClaimCreate, user: Dict[str, Any] = Depends(get_curren
         get_owned_workspace(user["id"], payload.workspace_id)
     with get_connection() as conn:
         cursor = conn.execute(
-            "INSERT INTO claims (user_id, claim_text, status, workspace_id) VALUES (?, ?, ?, ?)",
+            "INSERT INTO claims (user_id, claim_text, status, workspace_id) VALUES (%s, %s, %s, %s)",
             (user["id"], payload.claim_text, payload.status, payload.workspace_id),
         )
         claim_id = cursor.lastrowid
@@ -2563,7 +2563,7 @@ def create_evidence(payload: EvidenceCreate, user: Dict[str, Any] = Depends(get_
             """
             INSERT INTO evidence
                 (user_id, source_id, source_title, authors, year, doi, url, excerpt, evidence_type, relation, confidence, workspace_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 user["id"],
@@ -2581,7 +2581,7 @@ def create_evidence(payload: EvidenceCreate, user: Dict[str, Any] = Depends(get_
             ),
         )
         evidence_id = cursor.lastrowid
-        row = conn.execute("SELECT * FROM evidence WHERE id = ? AND user_id = ?", (evidence_id, user["id"])).fetchone()
+        row = conn.execute("SELECT * FROM evidence WHERE id = %s AND user_id = %s", (evidence_id, user["id"])).fetchone()
     return evidence_from_row(row)
 
 
@@ -2589,33 +2589,33 @@ def create_evidence(payload: EvidenceCreate, user: Dict[str, Any] = Depends(get_
 def link_evidence(claim_id: int, payload: EvidenceLink, user: Dict[str, Any] = Depends(get_current_user)) -> Dict[str, Any]:
     with get_connection() as conn:
         claim = conn.execute(
-            "SELECT id FROM claims WHERE id = ? AND user_id = ?",
+            "SELECT id FROM claims WHERE id = %s AND user_id = %s",
             (claim_id, user["id"]),
         ).fetchone()
         evidence = conn.execute(
-            "SELECT id, workspace_id FROM evidence WHERE id = ? AND user_id = ?",
+            "SELECT id, workspace_id FROM evidence WHERE id = %s AND user_id = %s",
             (payload.evidence_id, user["id"]),
         ).fetchone()
         if not claim or not evidence:
             raise HTTPException(status_code=404, detail="Claim or evidence not found")
         claim_workspace = conn.execute(
-            "SELECT workspace_id FROM claims WHERE id = ? AND user_id = ?",
+            "SELECT workspace_id FROM claims WHERE id = %s AND user_id = %s",
             (claim_id, user["id"]),
         ).fetchone()["workspace_id"]
         if claim_workspace and evidence["workspace_id"] and claim_workspace != evidence["workspace_id"]:
             raise HTTPException(status_code=409, detail="Claim and evidence belong to different workspaces")
         if claim_workspace and evidence["workspace_id"] is None:
             conn.execute(
-                "UPDATE evidence SET workspace_id = ? WHERE id = ? AND user_id = ?",
+                "UPDATE evidence SET workspace_id = %s WHERE id = %s AND user_id = %s",
                 (claim_workspace, payload.evidence_id, user["id"]),
             )
         existing = conn.execute(
-            "SELECT 1 FROM claim_evidence WHERE claim_id = ? AND evidence_id = ?",
+            "SELECT 1 FROM claim_evidence WHERE claim_id = %s AND evidence_id = %s",
             (claim_id, payload.evidence_id),
         ).fetchone()
         if not existing:
             conn.execute(
-                "INSERT INTO claim_evidence (claim_id, evidence_id) VALUES (?, ?)",
+                "INSERT INTO claim_evidence (claim_id, evidence_id) VALUES (%s, %s)",
                 (claim_id, payload.evidence_id),
             )
     return claim_response(user["id"], claim_id)
@@ -2637,11 +2637,11 @@ def create_claim_relation(claim_id: int, payload: ClaimRelationCreate, user: Dic
         get_owned_workspace(user["id"], payload.workspace_id)
     with get_connection() as conn:
         source_claim = conn.execute(
-            "SELECT id, workspace_id FROM claims WHERE id = ? AND user_id = ?",
+            "SELECT id, workspace_id FROM claims WHERE id = %s AND user_id = %s",
             (claim_id, user["id"]),
         ).fetchone()
         target_claim = conn.execute(
-            "SELECT id, workspace_id FROM claims WHERE id = ? AND user_id = ?",
+            "SELECT id, workspace_id FROM claims WHERE id = %s AND user_id = %s",
             (payload.target_claim_id, user["id"]),
         ).fetchone()
         if not source_claim or not target_claim:
@@ -2654,18 +2654,18 @@ def create_claim_relation(claim_id: int, payload: ClaimRelationCreate, user: Dic
             raise HTTPException(status_code=409, detail="Both claims must belong to the relation workspace")
 
         duplicate = conn.execute(
-            "SELECT id FROM claim_relations WHERE user_id = ? AND source_claim_id = ? AND target_claim_id = ? AND relation = ?",
+            "SELECT id FROM claim_relations WHERE user_id = %s AND source_claim_id = %s AND target_claim_id = %s AND relation = %s",
             (user["id"], claim_id, payload.target_claim_id, payload.relation),
         ).fetchone()
         if duplicate:
             raise HTTPException(status_code=409, detail="Claim relation already exists")
 
         cursor = conn.execute(
-            "INSERT INTO claim_relations (user_id, source_claim_id, target_claim_id, relation, workspace_id) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO claim_relations (user_id, source_claim_id, target_claim_id, relation, workspace_id) VALUES (%s, %s, %s, %s, %s)",
             (user["id"], claim_id, payload.target_claim_id, payload.relation, workspace_id),
         )
         relation_row = conn.execute(
-            "SELECT * FROM claim_relations WHERE id = ? AND user_id = ?",
+            "SELECT * FROM claim_relations WHERE id = %s AND user_id = %s",
             (cursor.lastrowid, user["id"]),
         ).fetchone()
 
@@ -2676,7 +2676,7 @@ def create_claim_relation(claim_id: int, payload: ClaimRelationCreate, user: Dic
 def get_claim_relations(claim_id: int, user: Dict[str, Any] = Depends(get_current_user)) -> List[Dict[str, Any]]:
     with get_connection() as conn:
         claim = conn.execute(
-            "SELECT id FROM claims WHERE id = ? AND user_id = ?",
+            "SELECT id FROM claims WHERE id = %s AND user_id = %s",
             (claim_id, user["id"]),
         ).fetchone()
         if not claim:
@@ -2684,7 +2684,7 @@ def get_claim_relations(claim_id: int, user: Dict[str, Any] = Depends(get_curren
         rows = conn.execute(
             """
             SELECT * FROM claim_relations
-            WHERE user_id = ? AND (source_claim_id = ? OR target_claim_id = ?)
+            WHERE user_id = %s AND (source_claim_id = %s OR target_claim_id = %s)
             ORDER BY created_at DESC
             """,
             (user["id"], claim_id, claim_id),
@@ -2735,7 +2735,7 @@ async def search(
             if user:
                 with get_connection() as conn:
                     conn.execute(
-                        "INSERT INTO searches (user_id, query, results, workspace_id) VALUES (?, ?, ?, ?)",
+                        "INSERT INTO searches (user_id, query, results, workspace_id) VALUES (%s, %s, %s, %s)",
                         (user["id"], query, json.dumps(payload["results"]), workspace_id),
                     )
         except Exception:
